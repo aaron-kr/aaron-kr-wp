@@ -38,6 +38,43 @@ add_filter( 'option_jetpack_active_modules', function ( $modules ) {
 add_filter( 'show_admin_bar', '__return_false' );
 
 // ════════════════════════════════════════════════════════════════════════════
+// 2b. HEADLESS PREVIEW URLS
+//     In local dev (WP_HOME = WP_SITEURL), rewrite "View Post" and preview
+//     links to point at the Next.js dev server (localhost:3000) instead of
+//     the WP domain. This lets you click View Post from WP admin and see the
+//     Next.js-rendered version. 404s until that route exists in Next.js.
+//
+//     In production, WP_HOME is already aaron.kr so links go there naturally.
+// ════════════════════════════════════════════════════════════════════════════
+
+add_filter( 'preview_post_link', 'aaron_kr_headless_preview_link', 10, 2 );
+add_filter( 'post_link',         'aaron_kr_headless_post_link', 10, 2 );
+add_filter( 'post_type_link',    'aaron_kr_headless_post_link', 10, 2 );
+add_filter( 'page_link',         'aaron_kr_headless_post_link', 10, 2 );
+
+function aaron_kr_frontend_url(): string {
+    // In production WP_HOME differs from WP_SITEURL — use WP_HOME.
+    // In local dev they are the same — use localhost:3000.
+    $home = untrailingslashit( get_option( 'home' ) );
+    $site = untrailingslashit( get_option( 'siteurl' ) );
+    return ( $home !== $site ) ? $home : 'http://localhost:3000';
+}
+
+function aaron_kr_headless_post_link( string $url, $post ): string {
+    $wp_base = untrailingslashit( get_option( 'siteurl' ) );
+    $fe_base = aaron_kr_frontend_url();
+    return str_replace( $wp_base, $fe_base, $url );
+}
+
+function aaron_kr_headless_preview_link( string $url, $post ): string {
+    // Preview URL: replace domain but keep query params (?preview=true etc.)
+    // so WP still handles the preview render via index.php passthrough
+    $wp_base = untrailingslashit( get_option( 'siteurl' ) );
+    $fe_base = aaron_kr_frontend_url();
+    return str_replace( $wp_base, $fe_base, $url );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // 3. CORS
 // ════════════════════════════════════════════════════════════════════════════
 
