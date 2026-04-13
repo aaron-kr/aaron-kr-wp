@@ -1,0 +1,12 @@
+/*
+Theme Name:  Aaron KR Headless
+Theme URI:   https://aaron.kr
+Author:      Aaron Snowberger
+Author URI:  https://aaron.kr
+Description: Minimal headless theme for aaron.kr. This theme has no front-end — it exists solely to satisfy WordPress's theme requirement. All presentation is handled by the Next.js frontend at aaron.kr. Do not activate a visual theme on top of this; it will have no effect on the public site.
+Version:     1.0.0
+License:     GNU General Public License v2 or later
+Text Domain: aaron-kr-headless
+*/
+
+/* intentionally empty — no visitors render this theme */
