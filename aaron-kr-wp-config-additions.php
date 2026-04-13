@@ -2,41 +2,42 @@
 /**
  * aaron-kr-wp-config-additions.php
  *
- * These lines go into your EXISTING wp-config.php on lab.aaron.kr
- * (and on your local WP install).
- *
- * Add them BEFORE the line that says:
+ * Paste these into your wp-config.php BEFORE the line:
  *   /* That's all, stop editing! Happy publishing. */
+ *
+ * KEY RULE: Never call add_filter() / add_action() / any WP function here.
+ * wp-config.php loads before WordPress core — those functions don't exist yet.
+ * Hooks belong in functions.php or the mu-plugin.
  */
 
-// ── Headless site URL ────────────────────────────────────────────────────────
-// WP_SITEURL  = where WordPress is installed (admin, REST API, uploads)
-// WP_HOME     = the "public" URL — set to the Next.js frontend
+// ════════════════════════════════════════════════════════════════
+// LOCAL DEV  — paste this block into your LocalWP wp-config.php
+// ════════════════════════════════════════════════════════════════
 //
-// This means:
-//   - wp-admin lives at:        https://lab.aaron.kr/wp-admin
-//   - REST API lives at:        https://lab.aaron.kr/wp-json/wp/v2/...
-//   - Uploads live at:          https://lab.aaron.kr/wp-content/uploads/...
-//   - Front-end (Next.js) at:   https://aaron.kr
+// Keep WP_HOME = WP_SITEURL (your local WP URL).
+// Do NOT set WP_HOME to http://localhost:3000.
 //
-// For LOCAL development, override these in your local wp-config.php:
-//   define( 'WP_SITEURL', 'http://localhost:8080' );
-//   define( 'WP_HOME',    'http://localhost:8080' );
+// WHY: Next.js reads the REST API via WP_API_URL in .env.local.
+// It doesn't care what WP_HOME is. But WP admin "View Post" links
+// use WP_HOME — if that's localhost:3000, they send you to a
+// Next.js route that doesn't exist yet → 404.
+//
+define( 'WP_SITEURL', 'http://aaronkr.local' );
+define( 'WP_HOME',    'http://aaronkr.local' );
 
-define( 'WP_SITEURL', 'https://lab.aaron.kr' );
-define( 'WP_HOME',    'https://aaron.kr' );      // ← Next.js frontend URL
+// ════════════════════════════════════════════════════════════════
+// PRODUCTION — Dreamhost VPS at lab.aaron.kr
+// ════════════════════════════════════════════════════════════════
+//
+// define( 'WP_SITEURL', 'https://lab.aaron.kr' );
+// define( 'WP_HOME',    'https://aaron.kr' );
 
-// ── Disable the WordPress theme/plugin editor in admin (security) ────────────
-define( 'DISALLOW_FILE_EDIT', true );
+// ════════════════════════════════════════════════════════════════
+// SHARED (both environments)
+// ════════════════════════════════════════════════════════════════
 
-// ── Disable automatic plugin/theme updates (you control deploys) ─────────────
-define( 'AUTOMATIC_UPDATER_DISABLED', true );
+define( 'DISALLOW_FILE_EDIT',        true  );
+define( 'AUTOMATIC_UPDATER_DISABLED', true  );
+define( 'WP_MEMORY_LIMIT',           '256M' );
 
-// ── Set a generous memory limit for REST API responses ───────────────────────
-define( 'WP_MEMORY_LIMIT', '256M' );
-
-// ── REST API namespace shortcut (optional, for quick cURL testing) ────────────
-// curl https://lab.aaron.kr/wp-json/wp/v2/posts?per_page=3&_fields=id,title,slug
-
-// ── Disable the "admin bar" on the frontend (nobody visits the WP frontend) ──
-add_filter( 'show_admin_bar', '__return_false' );
+// add_filter( 'show_admin_bar', '__return_false' ); ← in mu-plugin, not here

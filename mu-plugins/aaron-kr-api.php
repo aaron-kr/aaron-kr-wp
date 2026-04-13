@@ -1,366 +1,221 @@
 <?php
 /**
  * Plugin Name:  Aaron KR — Headless API Layer
- * Description:  Configures the WordPress REST API for the aaron.kr Next.js frontend.
- *               Handles CORS, registers post types, adds custom REST fields
- *               (reading time, clean excerpt, author card, etc.), and manages
- *               Jetpack Portfolio/Testimonials REST exposure.
- *               Installed as a must-use plugin so it's always active regardless
- *               of theme or plugin changes.
- * Version:      1.0.0
+ * Description:  REST API configuration, custom post types, CORS, admin enhancements.
+ * Version:      1.2.0
  * Author:       Aaron Snowberger
- *
- * INSTALLATION:
- *   Copy this file to: wp-content/mu-plugins/aaron-kr-api.php
- *   No activation needed — mu-plugins load automatically on every request.
  */
 
 defined( 'ABSPATH' ) || exit;
 
 // ════════════════════════════════════════════════════════════════════════════
-// 1. CORS — allow the Next.js frontend to call the REST API
-//    Adjust ALLOWED_ORIGINS if you add more frontends (staging, etc.)
+// 1. JETPACK — disable ONLY the custom post type module
+//    Keeps Jetpack active for stats, CDN, security, etc.
+//    Must run before Jetpack registers its modules.
+//    This is why it's first in the file.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Remove Jetpack's 'custom-content-types' module from the active modules list.
+// This stops Jetpack registering jetpack-portfolio and jetpack-testimonial,
+// which would overwrite our rewrite rules with the same /portfolio/ slug.
+add_filter( 'jetpack_get_available_modules', function ( $modules ) {
+    unset( $modules['custom-content-types'] );
+    return $modules;
+} );
+
+// Belt-and-suspenders: also filter the stored active modules option
+add_filter( 'option_jetpack_active_modules', function ( $modules ) {
+    return array_values( array_diff(
+        (array) $modules,
+        [ 'custom-content-types' ]
+    ) );
+} );
+
+// ════════════════════════════════════════════════════════════════════════════
+// 2. ADMIN BAR (must live here, not in wp-config.php)
+// ════════════════════════════════════════════════════════════════════════════
+
+add_filter( 'show_admin_bar', '__return_false' );
+
+// ════════════════════════════════════════════════════════════════════════════
+// 3. CORS
 // ════════════════════════════════════════════════════════════════════════════
 
 define( 'AARON_KR_ALLOWED_ORIGINS', [
     'https://aaron.kr',
     'https://www.aaron.kr',
-    'http://localhost:3000',   // local Next.js dev server
-    'http://localhost:3001',   // alternate port
+    'http://localhost:3000',
+    'http://localhost:3001',
 ] );
 
 add_action( 'rest_api_init', function () {
     remove_filter( 'rest_pre_serve_request', 'rest_send_cors_headers' );
     add_filter( 'rest_pre_serve_request', 'aaron_kr_cors_headers' );
 }, 15 );
-
 add_action( 'send_headers', 'aaron_kr_cors_headers' );
 
 function aaron_kr_cors_headers( $value = null ) {
-    $origin = isset( $_SERVER['HTTP_ORIGIN'] ) ? $_SERVER['HTTP_ORIGIN'] : '';
-
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
     if ( in_array( $origin, AARON_KR_ALLOWED_ORIGINS, true ) ) {
-        header( 'Access-Control-Allow-Origin: ' . esc_url_raw( $origin ) );
+        header( 'Access-Control-Allow-Origin: '    . esc_url_raw( $origin ) );
         header( 'Access-Control-Allow-Methods: GET, OPTIONS' );
         header( 'Access-Control-Allow-Credentials: true' );
         header( 'Access-Control-Allow-Headers: Authorization, Content-Type, X-WP-Nonce' );
         header( 'Vary: Origin' );
     }
-
-    // Handle preflight OPTIONS requests
-    if ( 'OPTIONS' === $_SERVER['REQUEST_METHOD'] ) {
-        status_header( 204 );
-        exit;
+    if ( 'OPTIONS' === ( $_SERVER['REQUEST_METHOD'] ?? '' ) ) {
+        status_header( 204 ); exit;
     }
-
     return $value;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 2. POST TYPES — register custom types with full REST API support
+// 4. POST TYPES
 // ════════════════════════════════════════════════════════════════════════════
 
 add_action( 'init', 'aaron_kr_register_post_types' );
 
 function aaron_kr_register_post_types() {
 
-    // ── Research Papers ──────────────────────────────────────────────────────
+    register_post_type( 'portfolio', [
+        'labels'       => [
+            'name'          => 'Portfolio',
+            'singular_name' => 'Portfolio Item',
+            'add_new_item'  => 'Add Portfolio Item',
+            'edit_item'     => 'Edit Portfolio Item',
+            'menu_name'     => 'Portfolio',
+        ],
+        'public'       => true,
+        'show_in_rest' => true,
+        'rest_base'    => 'portfolio',
+        'supports'     => [ 'title', 'editor', 'excerpt', 'thumbnail', 'custom-fields', 'revisions' ],
+        'has_archive'  => false,
+        'rewrite'      => [ 'slug' => 'portfolio', 'with_front' => false ],
+        'menu_icon'    => 'dashicons-art',
+        'menu_position'=> 5,
+        'taxonomies'   => [ 'portfolio_type', 'post_tag' ],
+    ] );
+
+    register_taxonomy( 'portfolio_type', 'portfolio', [
+        'label'        => 'Portfolio Types',
+        'hierarchical' => true,
+        'show_in_rest' => true,
+        'rest_base'    => 'portfolio-types',
+        'rewrite'      => [ 'slug' => 'portfolio-type', 'with_front' => false ],
+    ] );
+
+    register_post_type( 'testimonial', [
+        'labels'       => [
+            'name'          => 'Testimonials',
+            'singular_name' => 'Testimonial',
+            'add_new_item'  => 'Add Testimonial',
+            'menu_name'     => 'Testimonials',
+        ],
+        'public'       => true,
+        'show_in_rest' => true,
+        'rest_base'    => 'testimonials',
+        'supports'     => [ 'title', 'editor', 'excerpt', 'thumbnail', 'custom-fields' ],
+        'has_archive'  => false,
+        'rewrite'      => [ 'slug' => 'testimonials', 'with_front' => false ],
+        'menu_icon'    => 'dashicons-format-quote',
+        'menu_position'=> 6,
+    ] );
+
     register_post_type( 'research', [
-        'label'         => 'Research',
-        'labels'        => [
+        'labels'       => [
             'name'          => 'Research Papers',
             'singular_name' => 'Research Paper',
             'add_new_item'  => 'Add Research Paper',
-            'edit_item'     => 'Edit Research Paper',
+            'menu_name'     => 'Research',
         ],
-        'public'        => true,
-        'show_in_rest'  => true,        // ← essential for REST API access
-        'rest_base'     => 'research',  // → /wp-json/wp/v2/research
-        'supports'      => [ 'title', 'editor', 'excerpt', 'thumbnail',
-                             'custom-fields', 'revisions', 'author' ],
-        'has_archive'   => false,       // headless — no WP archive page needed
-        'rewrite'       => [ 'slug' => 'research' ],
-        'menu_icon'     => 'dashicons-welcome-learn-more',
-        'menu_position' => 5,
-        'taxonomies'    => [ 'post_tag' ],
+        'public'       => true,
+        'show_in_rest' => true,
+        'rest_base'    => 'research',
+        'supports'     => [ 'title', 'editor', 'excerpt', 'thumbnail', 'custom-fields', 'revisions', 'author' ],
+        'has_archive'  => false,
+        'rewrite'      => [ 'slug' => 'research', 'with_front' => false ],
+        'menu_icon'    => 'dashicons-welcome-learn-more',
+        'menu_position'=> 7,
+        'taxonomies'   => [ 'research_area', 'post_tag' ],
     ] );
 
-    // ── Talks / Presentations ────────────────────────────────────────────────
-    register_post_type( 'talk', [
-        'label'         => 'Talks',
-        'labels'        => [
-            'name'          => 'Talks',
-            'singular_name' => 'Talk',
-            'add_new_item'  => 'Add Talk',
-            'edit_item'     => 'Edit Talk',
-        ],
-        'public'        => true,
-        'show_in_rest'  => true,
-        'rest_base'     => 'talks',     // → /wp-json/wp/v2/talks
-        'supports'      => [ 'title', 'editor', 'excerpt', 'thumbnail',
-                             'custom-fields', 'revisions' ],
-        'has_archive'   => false,
-        'rewrite'       => [ 'slug' => 'talks' ],
-        'menu_icon'     => 'dashicons-megaphone',
-        'menu_position' => 6,
-        'taxonomies'    => [ 'post_tag' ],
-    ] );
-
-    // ── Courses (supplements the GitHub Pages site with WP-managed metadata) ─
-    register_post_type( 'course', [
-        'label'         => 'Courses',
-        'labels'        => [
-            'name'          => 'Courses',
-            'singular_name' => 'Course',
-        ],
-        'public'        => true,
-        'show_in_rest'  => true,
-        'rest_base'     => 'courses',   // → /wp-json/wp/v2/courses
-        'supports'      => [ 'title', 'editor', 'excerpt', 'thumbnail', 'custom-fields' ],
-        'has_archive'   => false,
-        'rewrite'       => [ 'slug' => 'courses' ],
-        'menu_icon'     => 'dashicons-book-alt',
-        'menu_position' => 7,
-    ] );
-}
-
-// ── Ensure Jetpack Portfolio & Testimonials are in the REST API ─────────────
-// Jetpack registers these early, so we patch them after init.
-add_action( 'init', 'aaron_kr_jetpack_rest', 20 );
-
-function aaron_kr_jetpack_rest() {
-    global $wp_post_types;
-
-    // Portfolio → /wp-json/wp/v2/jetpack-portfolio
-    if ( isset( $wp_post_types['jetpack-portfolio'] ) ) {
-        $wp_post_types['jetpack-portfolio']->show_in_rest = true;
-        $wp_post_types['jetpack-portfolio']->rest_base    = 'jetpack-portfolio';
-    }
-
-    // Testimonials → /wp-json/wp/v2/jetpack-testimonial
-    if ( isset( $wp_post_types['jetpack-testimonial'] ) ) {
-        $wp_post_types['jetpack-testimonial']->show_in_rest = true;
-        $wp_post_types['jetpack-testimonial']->rest_base    = 'jetpack-testimonial';
-    }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// 3. TAXONOMIES — add custom taxonomies and ensure all are in REST
-// ════════════════════════════════════════════════════════════════════════════
-
-add_action( 'init', 'aaron_kr_register_taxonomies' );
-
-function aaron_kr_register_taxonomies() {
-
-    // Research areas (hierarchical, like categories)
-    register_taxonomy( 'research_area', [ 'research' ], [
+    register_taxonomy( 'research_area', 'research', [
         'label'        => 'Research Areas',
         'hierarchical' => true,
         'show_in_rest' => true,
         'rest_base'    => 'research-areas',
-        'rewrite'      => [ 'slug' => 'research-area' ],
+        'rewrite'      => [ 'slug' => 'research-area', 'with_front' => false ],
     ] );
 
-    // Skills / tech tags (flat, shared across post types)
-    register_taxonomy( 'skill', [ 'research', 'talk', 'course', 'post' ], [
-        'label'        => 'Skills & Technologies',
-        'hierarchical' => false,
+    register_post_type( 'talk', [
+        'labels'       => [
+            'name'          => 'Talks',
+            'singular_name' => 'Talk',
+            'add_new_item'  => 'Add Talk',
+            'menu_name'     => 'Talks',
+        ],
+        'public'       => true,
         'show_in_rest' => true,
-        'rest_base'    => 'skills',
-        'rewrite'      => [ 'slug' => 'skill' ],
+        'rest_base'    => 'talks',
+        'supports'     => [ 'title', 'editor', 'excerpt', 'thumbnail', 'custom-fields', 'revisions' ],
+        'has_archive'  => false,
+        'rewrite'      => [ 'slug' => 'talks', 'with_front' => false ],
+        'menu_icon'    => 'dashicons-megaphone',
+        'menu_position'=> 8,
+        'taxonomies'   => [ 'post_tag' ],
+    ] );
+
+    register_post_type( 'course', [
+        'labels'       => [
+            'name'          => 'Courses',
+            'singular_name' => 'Course',
+            'add_new_item'  => 'Add Course',
+            'menu_name'     => 'Courses',
+        ],
+        'public'       => true,
+        'show_in_rest' => true,
+        'rest_base'    => 'courses',
+        'supports'     => [ 'title', 'editor', 'excerpt', 'thumbnail', 'custom-fields' ],
+        'has_archive'  => false,
+        'rewrite'      => [ 'slug' => 'courses', 'with_front' => false ],
+        'menu_icon'    => 'dashicons-book-alt',
+        'menu_position'=> 9,
     ] );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 4. CUSTOM REST FIELDS
-//    These extend the REST API response with data the Next.js frontend needs
-//    but that WordPress doesn't expose by default.
+// 5. REWRITE RULE FLUSH
+//    Runs once when version changes, and on theme switch.
 // ════════════════════════════════════════════════════════════════════════════
 
-add_action( 'rest_api_init', 'aaron_kr_register_rest_fields' );
+add_action( 'init', function () {
+    $ver = '1.2.0';
+    if ( get_option( 'aaron_kr_version' ) !== $ver ) {
+        update_option( 'aaron_kr_version', $ver );
+        flush_rewrite_rules( true ); // true = hard flush, rebuilds .htaccess
+    }
+}, 99 );
 
-function aaron_kr_register_rest_fields() {
-    $all_types = [ 'post', 'page', 'research', 'talk', 'course',
-                   'jetpack-portfolio', 'jetpack-testimonial' ];
+add_action( 'switch_theme', fn() => flush_rewrite_rules( true ) );
 
-    // ── Reading time ─────────────────────────────────────────────────────────
-    // Returns integer minutes. Frontend displays "5 min read".
-    register_rest_field( $all_types, 'reading_time_minutes', [
-        'get_callback' => function ( $post_arr ) {
-            $content    = get_post_field( 'post_content', $post_arr['id'] );
-            $word_count = str_word_count( wp_strip_all_tags( $content ) );
-            return (int) max( 1, ceil( $word_count / 200 ) ); // 200 wpm
-        },
-        'schema' => [
-            'description' => 'Estimated reading time in minutes.',
-            'type'        => 'integer',
-            'context'     => [ 'view' ],
-        ],
-    ] );
+// ════════════════════════════════════════════════════════════════════════════
+// 6. REST API — QUERY ENHANCEMENTS
+//    Merged from Aaron's WP Addons plugin
+// ════════════════════════════════════════════════════════════════════════════
 
-    // ── Plain excerpt ────────────────────────────────────────────────────────
-    // WP's default excerpt.rendered contains <p> tags. This gives a clean
-    // plain-text version, already truncated to 160 chars (good for meta too).
-    register_rest_field( $all_types, 'excerpt_plain', [
-        'get_callback' => function ( $post_arr ) {
-            $raw = get_post_field( 'post_excerpt', $post_arr['id'] );
-            if ( ! $raw ) {
-                $raw = get_post_field( 'post_content', $post_arr['id'] );
-            }
-            $plain = wp_strip_all_tags( $raw );
-            return mb_strimwidth( $plain, 0, 160, '…' );
-        },
-        'schema' => [
-            'description' => 'Plain-text excerpt, max 160 chars.',
-            'type'        => 'string',
-            'context'     => [ 'view' ],
-        ],
-    ] );
-
-    // ── Author card ──────────────────────────────────────────────────────────
-    // Returns everything the frontend needs without a second API call.
-    register_rest_field( $all_types, 'author_card', [
-        'get_callback' => function ( $post_arr ) {
-            $user_id = $post_arr['author'] ?? get_post_field( 'post_author', $post_arr['id'] );
-            if ( ! $user_id ) return null;
-            return [
-                'name'        => get_the_author_meta( 'display_name', $user_id ),
-                'slug'        => get_the_author_meta( 'user_nicename', $user_id ),
-                'description' => get_the_author_meta( 'description', $user_id ),
-                'url'         => get_the_author_meta( 'url', $user_id ),
-                'avatar'      => get_avatar_url( $user_id, [ 'size' => 96 ] ),
-                'twitter'     => get_the_author_meta( 'twitter', $user_id ),
-            ];
-        },
-        'schema' => [
-            'description' => 'Author card data.',
-            'type'        => 'object',
-            'context'     => [ 'view' ],
-        ],
-    ] );
-
-    // ── Featured image (all sizes, no _embed required) ───────────────────────
-    // Using _embed works but adds latency for the media lookup on WP's side.
-    // This field inlines just the URLs the frontend actually uses.
-    register_rest_field( $all_types, 'featured_image_urls', [
-        'get_callback' => function ( $post_arr ) {
-            $id = get_post_thumbnail_id( $post_arr['id'] );
-            if ( ! $id ) return null;
-            $full   = wp_get_attachment_image_src( $id, 'full' );
-            $large  = wp_get_attachment_image_src( $id, 'large' );
-            $medium = wp_get_attachment_image_src( $id, 'medium' );
-            $alt    = get_post_meta( $id, '_wp_attachment_image_alt', true );
-            return [
-                'full'   => $full   ? $full[0]   : null,
-                'large'  => $large  ? $large[0]  : null,
-                'medium' => $medium ? $medium[0] : null,
-                'alt'    => $alt ?: '',
-            ];
-        },
-        'schema' => [
-            'description' => 'Featured image URLs at multiple sizes.',
-            'type'        => 'object',
-            'context'     => [ 'view' ],
-        ],
-    ] );
-
-    // ── Categories (flat array of names + slugs, no second API call) ─────────
-    register_rest_field( [ 'post', 'research', 'talk' ], 'category_list', [
-        'get_callback' => function ( $post_arr ) {
-            $terms = get_the_terms( $post_arr['id'], 'category' );
-            if ( ! $terms || is_wp_error( $terms ) ) return [];
-            return array_map( fn( $t ) => [
-                'id'   => $t->term_id,
-                'name' => $t->name,
-                'slug' => $t->slug,
-            ], $terms );
-        },
-        'schema' => [
-            'description' => 'Categories as name/slug pairs.',
-            'type'        => 'array',
-            'context'     => [ 'view' ],
-        ],
-    ] );
-
-    // ── Tags ─────────────────────────────────────────────────────────────────
-    register_rest_field( $all_types, 'tag_list', [
-        'get_callback' => function ( $post_arr ) {
-            $terms = get_the_terms( $post_arr['id'], 'post_tag' );
-            if ( ! $terms || is_wp_error( $terms ) ) return [];
-            return array_map( fn( $t ) => [
-                'id'   => $t->term_id,
-                'name' => $t->name,
-                'slug' => $t->slug,
-            ], $terms );
-        },
-        'schema' => [
-            'description' => 'Tags as name/slug pairs.',
-            'type'        => 'array',
-            'context'     => [ 'view' ],
-        ],
-    ] );
-
-    // ── Research-specific fields ─────────────────────────────────────────────
-    // Stored as post meta. Edit in WP Admin → Research → (post) → Custom Fields,
-    // or use ACF / Meta Box plugin for a nicer UI.
-    register_rest_field( 'research', 'research_meta', [
-        'get_callback' => function ( $post_arr ) {
-            $id = $post_arr['id'];
-            return [
-                'venue'     => get_post_meta( $id, 'research_venue',     true ), // journal/conf name
-                'year'      => get_post_meta( $id, 'research_year',      true ),
-                'doi'       => get_post_meta( $id, 'research_doi',       true ),
-                'pdf_url'   => get_post_meta( $id, 'research_pdf_url',   true ),
-                'award'     => get_post_meta( $id, 'research_award',     true ), // e.g. "Best Thesis"
-                'coauthors' => get_post_meta( $id, 'research_coauthors', true ),
-            ];
-        },
-        'schema' => [
-            'description' => 'Research-specific metadata.',
-            'type'        => 'object',
-            'context'     => [ 'view' ],
-        ],
-    ] );
-
-    // ── Talk-specific fields ─────────────────────────────────────────────────
-    register_rest_field( 'talk', 'talk_meta', [
-        'get_callback' => function ( $post_arr ) {
-            $id = $post_arr['id'];
-            return [
-                'event'       => get_post_meta( $id, 'talk_event',       true ),
-                'event_date'  => get_post_meta( $id, 'talk_event_date',  true ),
-                'location'    => get_post_meta( $id, 'talk_location',    true ),
-                'slides_url'  => get_post_meta( $id, 'talk_slides_url',  true ),
-                'video_url'   => get_post_meta( $id, 'talk_video_url',   true ),
-                'language'    => get_post_meta( $id, 'talk_language',    true ), // EN / KO
-            ];
-        },
-        'schema' => [
-            'description' => 'Talk-specific metadata.',
-            'type'        => 'object',
-            'context'     => [ 'view' ],
-        ],
-    ] );
+// Allow ?orderby=rand
+foreach ( [ 'post', 'portfolio', 'testimonial', 'research', 'talk', 'course' ] as $_type ) {
+    add_filter( "rest_{$_type}_collection_params", function ( $params ) {
+        $params['orderby']['enum'][] = 'rand';
+        return $params;
+    } );
 }
+unset( $_type );
 
-// ════════════════════════════════════════════════════════════════════════════
-// 5. REST API — quality-of-life improvements
-// ════════════════════════════════════════════════════════════════════════════
+// Remove password-protected posts from REST
+add_filter( 'rest_post_query', fn( $args ) => array_merge( $args, [ 'has_password' => false ] ) );
 
-// ── Remove password-protected posts from REST responses ─────────────────────
-add_filter( 'rest_post_query', function ( $args ) {
-    $args['has_password'] = false;
-    return $args;
-} );
-
-// ── Add ?lang= filter support (for future bilingual post setup) ─────────────
-// If you later use Polylang or WPML, this hook is where you'd add
-// language filtering to REST queries.
-
-// ── Cache-Control headers on REST responses ──────────────────────────────────
-// Tells Vercel's edge cache (and ISR) how long to consider responses fresh.
-// Next.js's `next: { revalidate: 3600 }` fetch option handles this on the
-// JS side, but setting headers here provides a second layer.
+// Cache-Control headers
 add_filter( 'rest_post_dispatch', function ( $response ) {
     if ( ! is_wp_error( $response ) ) {
         $response->header( 'Cache-Control', 'public, max-age=3600, stale-while-revalidate=7200' );
@@ -368,178 +223,258 @@ add_filter( 'rest_post_dispatch', function ( $response ) {
     return $response;
 } );
 
-// ── Disable REST API for unauthenticated users on non-GET requests ────────────
-// Your Next.js app only reads (GET) — this blocks any write attempts.
+// Block unauthenticated writes
 add_filter( 'rest_authentication_errors', function ( $result ) {
-    if ( true === $result || is_wp_error( $result ) ) {
-        return $result;
-    }
+    if ( true === $result || is_wp_error( $result ) ) return $result;
     if ( ! is_user_logged_in() ) {
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
         if ( ! in_array( $method, [ 'GET', 'OPTIONS', 'HEAD' ], true ) ) {
-            return new WP_Error(
-                'rest_not_logged_in',
-                'Write access requires authentication.',
-                [ 'status' => 401 ]
-            );
+            return new WP_Error( 'rest_not_logged_in', 'Write access requires authentication.', [ 'status' => 401 ] );
         }
     }
     return $result;
 } );
 
 // ════════════════════════════════════════════════════════════════════════════
-// 6. ADMIN ENHANCEMENTS
-//    Better editing experience for the custom post types
+// 7. CUSTOM REST FIELDS
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── Show reading time in the post list column ────────────────────────────────
-add_filter( 'manage_posts_columns', 'aaron_kr_add_reading_time_column' );
-add_action( 'manage_posts_custom_column', 'aaron_kr_reading_time_column_value', 10, 2 );
+add_action( 'rest_api_init', 'aaron_kr_register_rest_fields' );
 
-function aaron_kr_add_reading_time_column( $columns ) {
-    $columns['reading_time'] = '⏱ Read';
-    return $columns;
-}
+function aaron_kr_register_rest_fields() {
+    $all = [ 'post', 'page', 'portfolio', 'testimonial', 'research', 'talk', 'course' ];
 
-function aaron_kr_reading_time_column_value( $column, $post_id ) {
-    if ( 'reading_time' === $column ) {
-        $content    = get_post_field( 'post_content', $post_id );
-        $word_count = str_word_count( wp_strip_all_tags( $content ) );
-        $minutes    = max( 1, ceil( $word_count / 200 ) );
-        echo esc_html( $minutes ) . ' min';
+    // Reading time
+    register_rest_field( $all, 'reading_time_minutes', [
+        'get_callback' => fn( $p ) => (int) max( 1, ceil(
+            str_word_count( wp_strip_all_tags( get_post_field( 'post_content', $p['id'] ) ) ) / 200
+        ) ),
+        'schema' => [ 'type' => 'integer', 'context' => [ 'view' ] ],
+    ] );
+
+    // Plain excerpt
+    register_rest_field( $all, 'excerpt_plain', [
+        'get_callback' => function ( $p ) {
+            $raw = get_post_field( 'post_excerpt', $p['id'] )
+                ?: get_post_field( 'post_content', $p['id'] );
+            return mb_strimwidth( wp_strip_all_tags( $raw ), 0, 160, '…' );
+        },
+        'schema' => [ 'type' => 'string', 'context' => [ 'view' ] ],
+    ] );
+
+    // Featured image (all sizes inline — no _embed needed)
+    register_rest_field( $all, 'featured_image_urls', [
+        'get_callback' => function ( $p ) {
+            $id = get_post_thumbnail_id( $p['id'] );
+            if ( ! $id ) return null;
+            $get = fn( $size ) => ( $src = wp_get_attachment_image_src( $id, $size ) ) ? $src[0] : null;
+            return [
+                'full'   => $get( 'full' ),
+                'large'  => $get( 'large' ),
+                'medium' => $get( 'medium' ),
+                'alt'    => get_post_meta( $id, '_wp_attachment_image_alt', true ) ?: '',
+            ];
+        },
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
+
+    // Author card
+    register_rest_field( $all, 'author_card', [
+        'get_callback' => function ( $p ) {
+            $uid = $p['author'] ?? get_post_field( 'post_author', $p['id'] );
+            if ( ! $uid ) return null;
+            return [
+                'name'        => get_the_author_meta( 'display_name', $uid ),
+                'slug'        => get_the_author_meta( 'user_nicename', $uid ),
+                'description' => get_the_author_meta( 'description', $uid ),
+                'url'         => get_the_author_meta( 'url', $uid ),
+                'avatar'      => get_avatar_url( $uid, [ 'size' => 96 ] ),
+            ];
+        },
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
+
+    // Category list
+    register_rest_field( [ 'post', 'research', 'talk' ], 'category_list', [
+        'get_callback' => function ( $p ) {
+            $terms = get_the_terms( $p['id'], 'category' );
+            if ( ! $terms || is_wp_error( $terms ) ) return [];
+            return array_map( fn( $t ) => [ 'id' => $t->term_id, 'name' => $t->name, 'slug' => $t->slug ], $terms );
+        },
+        'schema' => [ 'type' => 'array', 'context' => [ 'view' ] ],
+    ] );
+
+    // Tag list
+    register_rest_field( $all, 'tag_list', [
+        'get_callback' => function ( $p ) {
+            $terms = get_the_terms( $p['id'], 'post_tag' );
+            if ( ! $terms || is_wp_error( $terms ) ) return [];
+            return array_map( fn( $t ) => [ 'id' => $t->term_id, 'name' => $t->name, 'slug' => $t->slug ], $terms );
+        },
+        'schema' => [ 'type' => 'array', 'context' => [ 'view' ] ],
+    ] );
+
+    // ACF fields (from Aaron's WP Addons, merged here)
+    foreach ( $all as $type ) {
+        add_filter( "rest_prepare_{$type}", function ( $response, $post ) {
+            if ( function_exists( 'get_fields' ) && $fields = get_fields( $post->ID ) ) {
+                $response->data['acf'] = $fields;
+            }
+            return $response;
+        }, 10, 2 );
     }
+
+    // Yoast SEO meta
+    register_rest_field( $all, 'seo', [
+        'get_callback' => function ( $p ) {
+            $id = $p['id'];
+            return [
+                'title'       => get_post_meta( $id, '_yoast_wpseo_title',    true ) ?: get_the_title( $id ),
+                'description' => get_post_meta( $id, '_yoast_wpseo_metadesc', true ),
+                'canonical'   => get_post_meta( $id, '_yoast_wpseo_canonical', true ) ?: get_permalink( $id ),
+                'no_index'    => (bool) get_post_meta( $id, '_yoast_wpseo_meta-robots-noindex', true ),
+                'og_image'    => get_post_meta( $id, '_yoast_wpseo_opengraph-image', true ),
+            ];
+        },
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
+
+    // Post-type specific meta fields
+    register_rest_field( 'research', 'research_meta', [
+        'get_callback' => fn( $p ) => [
+            'venue'     => get_post_meta( $p['id'], 'research_venue',     true ),
+            'year'      => get_post_meta( $p['id'], 'research_year',      true ),
+            'doi'       => get_post_meta( $p['id'], 'research_doi',       true ),
+            'pdf_url'   => get_post_meta( $p['id'], 'research_pdf_url',   true ),
+            'award'     => get_post_meta( $p['id'], 'research_award',     true ),
+            'coauthors' => get_post_meta( $p['id'], 'research_coauthors', true ),
+        ],
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
+
+    register_rest_field( 'talk', 'talk_meta', [
+        'get_callback' => fn( $p ) => [
+            'event'      => get_post_meta( $p['id'], 'talk_event',      true ),
+            'event_date' => get_post_meta( $p['id'], 'talk_event_date', true ),
+            'location'   => get_post_meta( $p['id'], 'talk_location',   true ),
+            'slides_url' => get_post_meta( $p['id'], 'talk_slides_url', true ),
+            'video_url'  => get_post_meta( $p['id'], 'talk_video_url',  true ),
+            'language'   => get_post_meta( $p['id'], 'talk_language',   true ),
+        ],
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
+
+    register_rest_field( 'testimonial', 'testimonial_meta', [
+        'get_callback' => fn( $p ) => [
+            'person_name'  => get_post_meta( $p['id'], 'testimonial_name',     true ),
+            'person_title' => get_post_meta( $p['id'], 'testimonial_title',    true ),
+            'person_org'   => get_post_meta( $p['id'], 'testimonial_org',      true ),
+            'rating'       => get_post_meta( $p['id'], 'testimonial_rating',   true ),
+            'language'     => get_post_meta( $p['id'], 'testimonial_language', true ),
+            'context'      => get_post_meta( $p['id'], 'testimonial_context',  true ),
+        ],
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
+
+    register_rest_field( 'portfolio', 'portfolio_meta', [
+        'get_callback' => fn( $p ) => [
+            'client'      => get_post_meta( $p['id'], 'portfolio_client',      true ),
+            'year'        => get_post_meta( $p['id'], 'portfolio_year',        true ),
+            'tools'       => get_post_meta( $p['id'], 'portfolio_tools',       true ),
+            'project_url' => get_post_meta( $p['id'], 'portfolio_project_url', true ),
+        ],
+        'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
+    ] );
 }
 
-// ── Custom meta boxes for research and talk fields ───────────────────────────
-add_action( 'add_meta_boxes', 'aaron_kr_add_meta_boxes' );
+// ════════════════════════════════════════════════════════════════════════════
+// 8. ADMIN — FEATURED IMAGE COLUMN + META BOXES
+// ════════════════════════════════════════════════════════════════════════════
 
-function aaron_kr_add_meta_boxes() {
-    add_meta_box(
-        'aaron_kr_research_meta',
-        'Research Details',
-        'aaron_kr_research_meta_box',
-        'research',
-        'side',
-        'high'
-    );
-    add_meta_box(
-        'aaron_kr_talk_meta',
-        'Talk Details',
-        'aaron_kr_talk_meta_box',
-        'talk',
-        'side',
-        'high'
-    );
+add_action( 'admin_head', function () {
+    echo '<style>
+        .column-featured_thumb { width: 58px !important; }
+        .column-featured_thumb img { width:50px;height:50px;object-fit:cover;border-radius:4px;display:block; }
+        .column-featured_thumb .no-thumb { width:50px;height:50px;background:#1b2825;border-radius:4px;
+            display:flex;align-items:center;justify-content:center;font-size:20px;color:#3e5852; }
+    </style>';
+} );
+
+$_thumb_types = [ 'post', 'page', 'portfolio', 'testimonial', 'research', 'talk', 'course' ];
+foreach ( $_thumb_types as $_type ) {
+    add_filter( "manage_{$_type}_posts_columns", function ( $cols ) {
+        $new = [];
+        foreach ( $cols as $k => $v ) {
+            $new[$k] = $v;
+            if ( $k === 'cb' ) $new['featured_thumb'] = '🖼';
+        }
+        return $new;
+    } );
+    add_action( "manage_{$_type}_posts_custom_column", function ( $col, $id ) {
+        if ( $col !== 'featured_thumb' ) return;
+        echo has_post_thumbnail( $id )
+            ? get_the_post_thumbnail( $id, [50, 50] )
+            : '<div class="no-thumb">·</div>';
+    }, 10, 2 );
 }
+unset( $_thumb_types, $_type );
 
-function aaron_kr_research_meta_box( $post ) {
+// Reading time column on posts
+add_filter( 'manage_posts_columns', fn( $c ) => array_merge( $c, [ 'reading_time' => '⏱' ] ) );
+add_action( 'manage_posts_custom_column', function ( $col, $id ) {
+    if ( $col !== 'reading_time' ) return;
+    $words = str_word_count( wp_strip_all_tags( get_post_field( 'post_content', $id ) ) );
+    echo esc_html( max( 1, ceil( $words / 200 ) ) ) . ' min';
+}, 10, 2 );
+
+// Meta boxes
+add_action( 'add_meta_boxes', function () {
+    add_meta_box( 'aaron_kr_research',    'Research Details',    'aaron_kr_research_mb',    'research',    'side', 'high' );
+    add_meta_box( 'aaron_kr_talk',        'Talk Details',        'aaron_kr_talk_mb',        'talk',        'side', 'high' );
+    add_meta_box( 'aaron_kr_testimonial', 'Testimonial Details', 'aaron_kr_testimonial_mb', 'testimonial', 'side', 'high' );
+    add_meta_box( 'aaron_kr_portfolio',   'Portfolio Details',   'aaron_kr_portfolio_mb',   'portfolio',   'side', 'high' );
+} );
+
+function aaron_kr_render_fields( int $post_id, array $fields ): void {
     wp_nonce_field( 'aaron_kr_save_meta', 'aaron_kr_meta_nonce' );
-    $fields = [
-        'research_venue'     => 'Venue / Journal',
-        'research_year'      => 'Year',
-        'research_doi'       => 'DOI',
-        'research_pdf_url'   => 'PDF URL',
-        'research_award'     => 'Award (if any)',
-        'research_coauthors' => 'Co-authors',
-    ];
-    aaron_kr_render_meta_fields( $post->ID, $fields );
-}
-
-function aaron_kr_talk_meta_box( $post ) {
-    wp_nonce_field( 'aaron_kr_save_meta', 'aaron_kr_meta_nonce' );
-    $fields = [
-        'talk_event'      => 'Event Name',
-        'talk_event_date' => 'Event Date (YYYY-MM-DD)',
-        'talk_location'   => 'Location',
-        'talk_slides_url' => 'Slides URL',
-        'talk_video_url'  => 'Video URL',
-        'talk_language'   => 'Language (EN / KO)',
-    ];
-    aaron_kr_render_meta_fields( $post->ID, $fields );
-}
-
-function aaron_kr_render_meta_fields( $post_id, $fields ) {
-    echo '<table style="width:100%;border-collapse:collapse">';
+    echo '<table style="width:100%">';
     foreach ( $fields as $key => $label ) {
-        $value = get_post_meta( $post_id, $key, true );
-        printf(
-            '<tr><td style="padding:4px 0"><label for="%1$s" style="font-weight:600;font-size:12px">%2$s</label></td></tr>
-             <tr><td style="padding-bottom:8px"><input type="text" id="%1$s" name="%1$s" value="%3$s" style="width:100%%;box-sizing:border-box"/></td></tr>',
-            esc_attr( $key ),
-            esc_html( $label ),
-            esc_attr( $value )
-        );
+        $val = esc_attr( get_post_meta( $post_id, $key, true ) );
+        echo "<tr><td style='padding:2px 0'><label style='font-weight:600;font-size:11px'>$label</label></td></tr>
+              <tr><td style='padding-bottom:6px'><input type='text' name='$key' value='$val' style='width:100%;box-sizing:border-box'/></td></tr>";
     }
     echo '</table>';
 }
 
-// ── Save meta box data ────────────────────────────────────────────────────────
-add_action( 'save_post', 'aaron_kr_save_meta_box_data' );
-
-function aaron_kr_save_meta_box_data( $post_id ) {
-    if (
-        ! isset( $_POST['aaron_kr_meta_nonce'] ) ||
-        ! wp_verify_nonce( $_POST['aaron_kr_meta_nonce'], 'aaron_kr_save_meta' ) ||
-        defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ||
-        ! current_user_can( 'edit_post', $post_id )
-    ) {
-        return;
-    }
-
-    $all_meta_keys = [
-        'research_venue', 'research_year', 'research_doi',
-        'research_pdf_url', 'research_award', 'research_coauthors',
-        'talk_event', 'talk_event_date', 'talk_location',
-        'talk_slides_url', 'talk_video_url', 'talk_language',
-    ];
-
-    foreach ( $all_meta_keys as $key ) {
-        if ( isset( $_POST[ $key ] ) ) {
-            update_post_meta( $post_id, $key, sanitize_text_field( $_POST[ $key ] ) );
-        }
-    }
+function aaron_kr_research_mb( $p ): void {
+    aaron_kr_render_fields( $p->ID, [ 'research_venue'=>'Venue / Journal','research_year'=>'Year',
+        'research_doi'=>'DOI','research_pdf_url'=>'PDF URL','research_award'=>'Award','research_coauthors'=>'Co-authors' ] );
+}
+function aaron_kr_talk_mb( $p ): void {
+    aaron_kr_render_fields( $p->ID, [ 'talk_event'=>'Event Name','talk_event_date'=>'Date (YYYY-MM-DD)',
+        'talk_location'=>'Location','talk_slides_url'=>'Slides URL','talk_video_url'=>'Video URL','talk_language'=>'Language (EN/KO)' ] );
+}
+function aaron_kr_testimonial_mb( $p ): void {
+    aaron_kr_render_fields( $p->ID, [ 'testimonial_name'=>'Person Name','testimonial_title'=>'Their Title',
+        'testimonial_org'=>'Organization','testimonial_rating'=>'Rating (1–5)','testimonial_language'=>'Language (EN/KO)','testimonial_context'=>'Context' ] );
+}
+function aaron_kr_portfolio_mb( $p ): void {
+    aaron_kr_render_fields( $p->ID, [ 'portfolio_client'=>'Client','portfolio_year'=>'Year',
+        'portfolio_tools'=>'Tools Used','portfolio_project_url'=>'Project URL' ] );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// 7. PERFORMANCE
-// ════════════════════════════════════════════════════════════════════════════
+add_action( 'save_post', function ( $id ) {
+    if ( ! isset( $_POST['aaron_kr_meta_nonce'] ) ||
+         ! wp_verify_nonce( $_POST['aaron_kr_meta_nonce'], 'aaron_kr_save_meta' ) ||
+         ( defined( 'DOING_AUTOSAVE' ) && DOING_AUTOSAVE ) ||
+         ! current_user_can( 'edit_post', $id ) ) return;
 
-// ── Limit REST API post response fields to what Next.js actually uses ─────────
-// This cuts response size ~60% by dropping fields like ping_status, template,
-// meta (raw WP internal meta), etc. Only applies to GET requests.
-// If you need a field that's missing, add it to the $needed array.
-add_filter( 'rest_request_after_callbacks', function( $response, $handler, $request ) {
-    if ( 'GET' !== $request->get_method() ) {
-        return $response;
+    foreach ( [
+        'research_venue','research_year','research_doi','research_pdf_url','research_award','research_coauthors',
+        'talk_event','talk_event_date','talk_location','talk_slides_url','talk_video_url','talk_language',
+        'testimonial_name','testimonial_title','testimonial_org','testimonial_rating','testimonial_language','testimonial_context',
+        'portfolio_client','portfolio_year','portfolio_tools','portfolio_project_url',
+    ] as $key ) {
+        if ( isset( $_POST[$key] ) ) update_post_meta( $id, $key, sanitize_text_field( $_POST[$key] ) );
     }
-
-    $needed = [
-        'id', 'date', 'modified', 'slug', 'link', 'type', 'status',
-        'title', 'content', 'excerpt', 'featured_media',
-        'categories', 'tags', 'author',
-        // Custom fields added by this plugin:
-        'reading_time_minutes', 'excerpt_plain', 'author_card',
-        'featured_image_urls', 'category_list', 'tag_list',
-        'research_meta', 'talk_meta',
-        // Jetpack portfolio fields:
-        'jetpack_portfolio_tag', 'jetpack_portfolio_type',
-        '_links', '_embedded',
-    ];
-
-    if ( is_a( $response, 'WP_REST_Response' ) ) {
-        $data = $response->get_data();
-        if ( is_array( $data ) && isset( $data['id'] ) ) {
-            // Single post — filter keys
-            $response->set_data( array_intersect_key( $data, array_flip( $needed ) ) );
-        }
-        // Collection (array of posts) — filter each item
-        if ( is_array( $data ) && isset( $data[0]['id'] ) ) {
-            $response->set_data( array_map(
-                fn( $item ) => array_intersect_key( $item, array_flip( $needed ) ),
-                $data
-            ) );
-        }
-    }
-
-    return $response;
-}, 10, 3 );
+} );
