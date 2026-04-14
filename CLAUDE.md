@@ -4,7 +4,7 @@ This file gives Claude context about this repository. Read it before making any 
 
 ## What this repo is
 
-Headless WordPress backend for aaron.kr. WordPress runs at `lab.aaron.kr` and serves content exclusively via the REST API. No public visitors ever see a WordPress-rendered page. The Next.js frontend (`aaron-kr` repo, deployed to Vercel) fetches content here and renders everything.
+Headless WordPress backend for aaron.kr. WordPress runs at `notes.aaron.kr` and serves content exclusively via the REST API. No public visitors ever see a WordPress-rendered page. The Next.js frontend (`aaron-kr` repo, deployed to Vercel) fetches content here and renders everything.
 
 ## Critical architecture rules
 
@@ -58,6 +58,18 @@ Standard `post` and `page` are also extended with all custom fields.
 ## How rewrite flush works
 
 The mu-plugin stores `aaron_kr_version` in the options table. When the version string changes, it calls `flush_rewrite_rules(true)` once and updates the option. This means: after uploading a new version of the mu-plugin, the rules flush automatically on the next page load. Manual Settings → Permalinks save is only needed if something goes wrong.
+
+## Cross-post / external link fields (on all post types)
+
+Two REST fields are registered on every post type:
+- `naver_blog_url` — Naver Blog URL for Korean readers ("한국어로 읽기")
+- `korean_post_url` — Any other Korean cross-post URL (fallback if no Naver URL)
+
+Both appear in a "External / Cross-post Links" meta box on every edit screen. Set either to expose a "한국어로 읽기 →" link in the Next.js post meta byline.
+
+## Category featured images
+
+The `category_image_url` term meta is registered on the `category` taxonomy with `show_in_rest: true`. It appears as `meta.category_image_url` in the categories REST endpoint. Editors set it via the "Featured Image URL" field on the category add/edit screen. The "Beyond" section on the homepage reads this field for card images.
 
 ## CORS allowed origins
 

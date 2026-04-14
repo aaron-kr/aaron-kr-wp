@@ -26,10 +26,10 @@ define( 'WP_SITEURL', 'http://aaronkr.local' );
 define( 'WP_HOME',    'http://aaronkr.local' );
 
 // ════════════════════════════════════════════════════════════════
-// PRODUCTION — Dreamhost VPS at lab.aaron.kr
+// PRODUCTION — Dreamhost VPS at notes.aaron.kr
 // ════════════════════════════════════════════════════════════════
 //
-// define( 'WP_SITEURL', 'https://lab.aaron.kr' );
+// define( 'WP_SITEURL', 'https://notes.aaron.kr' );
 // define( 'WP_HOME',    'https://aaron.kr' );
 
 // ════════════════════════════════════════════════════════════════

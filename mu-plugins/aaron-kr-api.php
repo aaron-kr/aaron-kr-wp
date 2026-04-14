@@ -226,7 +226,7 @@ function aaron_kr_register_post_types() {
 // ════════════════════════════════════════════════════════════════════════════
 
 add_action( 'init', function () {
-    $ver = '1.2.0';
+    $ver = '1.3.0';
     if ( get_option( 'aaron_kr_version' ) !== $ver ) {
         update_option( 'aaron_kr_version', $ver );
         flush_rewrite_rules( true ); // true = hard flush, rebuilds .htaccess
@@ -511,7 +511,106 @@ add_action( 'save_post', function ( $id ) {
         'talk_event','talk_event_date','talk_location','talk_slides_url','talk_video_url','talk_language',
         'testimonial_name','testimonial_title','testimonial_org','testimonial_rating','testimonial_language','testimonial_context',
         'portfolio_client','portfolio_year','portfolio_tools','portfolio_project_url',
+        'naver_blog_url', 'korean_post_url',
     ] as $key ) {
         if ( isset( $_POST[$key] ) ) update_post_meta( $id, $key, sanitize_text_field( $_POST[$key] ) );
     }
+} );
+
+// ════════════════════════════════════════════════════════════════════════════
+// 9. NAVER BLOG / KOREAN CROSS-POST — meta on all post types
+//    Stored as post meta. Exposed via REST. Shown in meta box on every post.
+// ════════════════════════════════════════════════════════════════════════════
+
+add_action( 'rest_api_init', function () {
+    $all = [ 'post', 'page', 'portfolio', 'testimonial', 'research', 'talk', 'course' ];
+
+    foreach ( $all as $type ) {
+        register_rest_field( $type, 'naver_blog_url', [
+            'get_callback' => fn( $p ) => get_post_meta( $p['id'], 'naver_blog_url', true ) ?: null,
+            'schema'       => [ 'type' => [ 'string', 'null' ], 'context' => [ 'view' ] ],
+        ] );
+        register_rest_field( $type, 'korean_post_url', [
+            'get_callback' => fn( $p ) => get_post_meta( $p['id'], 'korean_post_url', true ) ?: null,
+            'schema'       => [ 'type' => [ 'string', 'null' ], 'context' => [ 'view' ] ],
+        ] );
+    }
+} );
+
+// Meta box: shown on every post/CPT edit screen
+add_action( 'add_meta_boxes', function () {
+    $all = [ 'post', 'page', 'portfolio', 'testimonial', 'research', 'talk', 'course' ];
+    add_meta_box(
+        'aaron_kr_external_links',
+        'External / Cross-post Links',
+        function ( $post ) {
+            wp_nonce_field( 'aaron_kr_save_meta', 'aaron_kr_meta_nonce' );
+            $naver   = esc_attr( get_post_meta( $post->ID, 'naver_blog_url', true ) );
+            $ko_url  = esc_attr( get_post_meta( $post->ID, 'korean_post_url', true ) );
+            echo '<table style="width:100%">
+                <tr><td style="padding:2px 0"><label style="font-weight:600;font-size:11px">Naver Blog URL (한국어로 읽기)</label></td></tr>
+                <tr><td style="padding-bottom:6px"><input type="url" name="naver_blog_url" value="' . $naver . '" style="width:100%;box-sizing:border-box" placeholder="https://m.blog.naver.com/..." /></td></tr>
+                <tr><td style="padding:2px 0"><label style="font-weight:600;font-size:11px">Korean Post URL (alternate link, if not Naver)</label></td></tr>
+                <tr><td style="padding-bottom:6px"><input type="url" name="korean_post_url" value="' . $ko_url . '" style="width:100%;box-sizing:border-box" placeholder="https://..." /></td></tr>
+            </table>';
+        },
+        $all, 'side', 'default'
+    );
+} );
+
+// ════════════════════════════════════════════════════════════════════════════
+// 10. CATEGORY FEATURED IMAGE
+//     Adds an image URL field to the category admin screen so editors can
+//     set a hero/card image per category. Exposed via REST under meta.
+// ════════════════════════════════════════════════════════════════════════════
+
+add_action( 'init', function () {
+    register_term_meta( 'category', 'category_image_url', [
+        'show_in_rest'  => true,
+        'type'          => 'string',
+        'description'   => 'Featured image URL for this category',
+        'single'        => true,
+        'auth_callback' => fn() => current_user_can( 'edit_posts' ),
+    ] );
+} );
+
+// Add field to "Add Category" form
+add_action( 'category_add_form_fields', function () {
+    echo '<div class="form-field">
+        <label for="category_image_url">Featured Image URL</label>
+        <input type="url" name="category_image_url" id="category_image_url" value="" />
+        <p>Paste a full image URL (from files.aaron.kr or any host).</p>
+    </div>';
+} );
+
+// Add field to "Edit Category" form
+add_action( 'category_edit_form_fields', function ( $term ) {
+    $val = esc_attr( get_term_meta( $term->term_id, 'category_image_url', true ) );
+    echo '<tr class="form-field">
+        <th><label for="category_image_url">Featured Image URL</label></th>
+        <td>
+            <input type="url" name="category_image_url" id="category_image_url" value="' . $val . '" style="width:100%" />
+            <p class="description">Paste a full image URL (from files.aaron.kr or any host).</p>
+        </td>
+    </tr>';
+} );
+
+// Save the field on both create and update
+add_action( 'created_category', 'aaron_kr_save_category_image_url' );
+add_action( 'edited_category',  'aaron_kr_save_category_image_url' );
+
+function aaron_kr_save_category_image_url( int $term_id ): void {
+    if ( isset( $_POST['category_image_url'] ) ) {
+        update_term_meta( $term_id, 'category_image_url', esc_url_raw( $_POST['category_image_url'] ) );
+    }
+}
+
+// Expose description + meta.category_image_url in REST response for categories
+// (description is already in REST; meta is exposed by register_term_meta with show_in_rest)
+add_filter( 'rest_prepare_category', function ( $response ) {
+    // Ensure 'count' and 'description' are always present
+    $data = $response->get_data();
+    if ( ! isset( $data['description'] ) ) $data['description'] = '';
+    $response->set_data( $data );
+    return $response;
 } );
