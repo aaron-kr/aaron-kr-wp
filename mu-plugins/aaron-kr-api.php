@@ -2,7 +2,7 @@
 /**
  * Plugin Name:  Aaron KR — Headless API Layer
  * Description:  REST API configuration, custom post types, CORS, admin enhancements.
- * Version:      1.2.0
+ * Version:      1.4.0
  * Author:       Aaron Snowberger
  */
 
@@ -226,7 +226,7 @@ function aaron_kr_register_post_types() {
 // ════════════════════════════════════════════════════════════════════════════
 
 add_action( 'init', function () {
-    $ver = '1.3.0';
+    $ver = '1.4.0';
     if ( get_option( 'aaron_kr_version' ) !== $ver ) {
         update_option( 'aaron_kr_version', $ver );
         flush_rewrite_rules( true ); // true = hard flush, rebuilds .htaccess
@@ -306,10 +306,11 @@ function aaron_kr_register_rest_fields() {
             if ( ! $id ) return null;
             $get = fn( $size ) => ( $src = wp_get_attachment_image_src( $id, $size ) ) ? $src[0] : null;
             return [
-                'full'   => $get( 'full' ),
-                'large'  => $get( 'large' ),
-                'medium' => $get( 'medium' ),
-                'alt'    => get_post_meta( $id, '_wp_attachment_image_alt', true ) ?: '',
+                'full'         => $get( 'full' ),
+                'large'        => $get( 'large' ),
+                'medium_large' => $get( 'medium_large' ),
+                'medium'       => $get( 'medium' ),
+                'alt'          => get_post_meta( $id, '_wp_attachment_image_alt', true ) ?: '',
             ];
         },
         'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
@@ -320,12 +321,14 @@ function aaron_kr_register_rest_fields() {
         'get_callback' => function ( $p ) {
             $uid = $p['author'] ?? get_post_field( 'post_author', $p['id'] );
             if ( ! $uid ) return null;
+            // Prefer a custom avatar URL set on the user profile; fall back to Gravatar.
+            $custom_avatar = get_user_meta( $uid, 'aaron_kr_custom_avatar', true );
             return [
                 'name'        => get_the_author_meta( 'display_name', $uid ),
                 'slug'        => get_the_author_meta( 'user_nicename', $uid ),
                 'description' => get_the_author_meta( 'description', $uid ),
                 'url'         => get_the_author_meta( 'url', $uid ),
-                'avatar'      => get_avatar_url( $uid, [ 'size' => 96 ] ),
+                'avatar'      => $custom_avatar ?: get_avatar_url( $uid, [ 'size' => 96 ] ),
             ];
         },
         'schema' => [ 'type' => 'object', 'context' => [ 'view' ] ],
@@ -614,3 +617,45 @@ add_filter( 'rest_prepare_category', function ( $response ) {
     $response->set_data( $data );
     return $response;
 } );
+
+// ════════════════════════════════════════════════════════════════════════════
+// 11. CUSTOM AUTHOR AVATAR
+//     Adds an "Avatar URL" field to WP Admin → Users → Profile.
+//     Set this to any publicly-accessible image URL (files.aaron.kr, etc.).
+//     The author_card REST field prefers this over Gravatar.
+//     If left blank, Gravatar is used as before.
+// ════════════════════════════════════════════════════════════════════════════
+
+add_action( 'show_user_profile', 'aaron_kr_custom_avatar_field' );
+add_action( 'edit_user_profile', 'aaron_kr_custom_avatar_field' );
+
+function aaron_kr_custom_avatar_field( WP_User $user ): void {
+    $val = esc_attr( get_user_meta( $user->ID, 'aaron_kr_custom_avatar', true ) );
+    echo '<h3>Custom Avatar (Headless Frontend)</h3>
+    <table class="form-table">
+        <tr>
+            <th><label for="aaron_kr_custom_avatar">Avatar Image URL</label></th>
+            <td>
+                <input type="url" name="aaron_kr_custom_avatar" id="aaron_kr_custom_avatar"
+                       value="' . $val . '" class="regular-text" />
+                <p class="description">
+                    Paste a direct image URL (e.g. from files.aaron.kr).
+                    Leave blank to use Gravatar. Appears in the post sidebar and post meta byline.
+                </p>
+                ' . ( $val ? '<img src="' . $val . '" alt="Avatar preview" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin-top:.5rem" />' : '' ) . '
+            </td>
+        </tr>
+    </table>';
+}
+
+add_action( 'personal_options_update',  'aaron_kr_save_custom_avatar' );
+add_action( 'edit_user_profile_update', 'aaron_kr_save_custom_avatar' );
+
+function aaron_kr_save_custom_avatar( int $user_id ): void {
+    if ( ! current_user_can( 'edit_user', $user_id ) ) return;
+    update_user_meta(
+        $user_id,
+        'aaron_kr_custom_avatar',
+        esc_url_raw( $_POST['aaron_kr_custom_avatar'] ?? '' )
+    );
+}

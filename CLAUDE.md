@@ -26,6 +26,12 @@ mu-plugins/aaron-kr-api.php        EVERYTHING else: CORS, CPTs, REST fields, adm
 aaron-kr-wp-config-additions.php   Reference snippet — not executed, paste into wp-config.php
 ```
 
+## Plugin version
+
+Current version: **1.4.0** (header and `$ver` stamp in the rewrite-flush action).
+
+When you bump the version stamp in the mu-plugin, WP auto-flushes rewrite rules on the next page load. Manual Settings → Permalinks save is only needed if something goes wrong.
+
 ## Custom post types and their REST slugs
 
 ```
@@ -44,8 +50,8 @@ Standard `post` and `page` are also extended with all custom fields.
 |---|---|---|
 | `reading_time_minutes` | integer | 200wpm calculation |
 | `excerpt_plain` | string | HTML-stripped, 160 char max |
-| `featured_image_urls` | object | `{full, large, medium, alt}` — no `_embed` needed |
-| `author_card` | object | `{name, slug, description, url, avatar}` |
+| `featured_image_urls` | object | `{full, large, medium_large, medium, alt}` — frontend prefers large→medium_large→medium→full |
+| `author_card` | object | `{name, slug, description, url, avatar}` — avatar prefers `aaron_kr_custom_avatar` user meta, falls back to Gravatar |
 | `category_list` | array | `[{id, name, slug}]` |
 | `tag_list` | array | `[{id, name, slug}]` |
 | `acf` | object | All ACF fields (if ACF plugin active) |
@@ -54,10 +60,16 @@ Standard `post` and `page` are also extended with all custom fields.
 | `talk_meta` | object | event, event_date, location, slides_url, video_url, language |
 | `testimonial_meta` | object | person_name, person_title, person_org, rating, language, context |
 | `portfolio_meta` | object | client, year, tools, project_url |
+| `naver_blog_url` | string | Naver Blog URL for Korean readers |
+| `korean_post_url` | string | Any other Korean cross-post URL |
 
 ## How rewrite flush works
 
 The mu-plugin stores `aaron_kr_version` in the options table. When the version string changes, it calls `flush_rewrite_rules(true)` once and updates the option. This means: after uploading a new version of the mu-plugin, the rules flush automatically on the next page load. Manual Settings → Permalinks save is only needed if something goes wrong.
+
+## Author avatar (custom)
+
+The mu-plugin adds an **"Avatar Image URL"** field to every user's WP Admin profile page (Users → Profile → "Custom Avatar (Headless Frontend)"). Set this to a direct image URL (e.g. from `files.aaron.kr`). The `author_card` REST field returns this URL as `avatar`; if blank, it falls back to Gravatar. This avoids showing the default "mystery man" Gravatar for users without a Gravatar account.
 
 ## Cross-post / external link fields (on all post types)
 
@@ -65,11 +77,11 @@ Two REST fields are registered on every post type:
 - `naver_blog_url` — Naver Blog URL for Korean readers ("한국어로 읽기")
 - `korean_post_url` — Any other Korean cross-post URL (fallback if no Naver URL)
 
-Both appear in a "External / Cross-post Links" meta box on every edit screen. Set either to expose a "한국어로 읽기 →" link in the Next.js post meta byline.
+Both appear in a "External / Cross-post Links" meta box on every edit screen.
 
 ## Category featured images
 
-The `category_image_url` term meta is registered on the `category` taxonomy with `show_in_rest: true`. It appears as `meta.category_image_url` in the categories REST endpoint. Editors set it via the "Featured Image URL" field on the category add/edit screen. The "Beyond" section on the homepage reads this field for card images.
+The `category_image_url` term meta is registered on the `category` taxonomy with `show_in_rest: true`. It appears as `meta.category_image_url` in the categories REST endpoint. Editors set it via the "Featured Image URL" field on the category add/edit screen. The "Beyond" section on the homepage uses this for card images.
 
 ## CORS allowed origins
 
@@ -84,8 +96,7 @@ Post-type-specific meta is stored as plain post meta (`wp_postmeta`). Key names:
 - Talk: `talk_event`, `talk_event_date`, `talk_location`, `talk_slides_url`, `talk_video_url`, `talk_language`
 - Testimonial: `testimonial_name`, `testimonial_title`, `testimonial_org`, `testimonial_rating`, `testimonial_language`, `testimonial_context`
 - Portfolio: `portfolio_client`, `portfolio_year`, `portfolio_tools`, `portfolio_project_url`
-
-ACF can also manage these fields if field groups are configured — the `acf` REST field will expose them automatically.
+- User (custom avatar): `aaron_kr_custom_avatar`
 
 ## Adding a new post type
 
@@ -104,3 +115,4 @@ ACF can also manage these fields if field groups are configured — the `acf` RE
 - Don't move the Jetpack conflict filters out of position 1 in the file
 - Don't use `flush_rewrite_rules()` on every request — it's expensive; use the version-stamp pattern
 - Don't commit wp-config.php or any file with database credentials
+- Don't reference `lab.aaron.kr` — WordPress is at `notes.aaron.kr`
