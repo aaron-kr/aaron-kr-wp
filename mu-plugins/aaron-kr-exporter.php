@@ -1,16 +1,58 @@
 <?php
 /**
  * Plugin Name: Aaron KR — Portfolio Exporter (aaronsnowberger.com)
- * Description: Exports Jetpack Portfolio and Testimonials as a self-contained
- *              JSON file. Remaps post types to the new custom CPT names, carries
- *              taxonomy terms, all post meta, and encodes featured images as
- *              base64 so they survive the transfer without URL dependency.
- *              INSTALL ON: aaronsnowberger.com (the SOURCE site)
- *              DELETE AFTER: export is complete
- * Version: 1.0.0
+ * Description: Exports Jetpack Portfolio/Testimonials as a downloadable JSON file.
+ *              Hooks into admin_init so download headers fire before WordPress
+ *              outputs any HTML — the only reliable way to force a file download
+ *              from a WP admin page.
+ *              INSTALL ON: aaronsnowberger.com   DELETE AFTER: export done
+ * Version: 1.2.0
  */
 
 defined( 'ABSPATH' ) || exit;
+
+// ════════════════════════════════════════════════════════════════════════════
+// DOWNLOAD HANDLER — must run in admin_init, before any HTML is output.
+// This is the critical fix: if we wait until the page callback, WordPress
+// has already sent the admin HTML headers and ob_end_clean() can't undo that.
+// ════════════════════════════════════════════════════════════════════════════
+
+add_action( 'admin_init', function () {
+    // Only act on our specific form submission
+    if ( empty( $_POST['aaron_kr_do_export'] ) ) return;
+    if ( ! current_user_can( 'manage_options' ) ) return;
+    if ( ! wp_verify_nonce( $_POST['_wpnonce'] ?? '', 'aaron_kr_export' ) ) {
+        wp_die( 'Security check failed.' );
+    }
+
+    $type  = sanitize_key( $_POST['export_type'] ?? 'portfolio' );
+    $embed = ! empty( $_POST['embed_images'] );
+
+    // Raise limits for this request
+    @set_time_limit( 600 );
+    @ini_set( 'memory_limit', '512M' );
+
+    // Kill any output buffers WordPress or plugins may have opened
+    while ( ob_get_level() > 0 ) {
+        ob_end_clean();
+    }
+
+    $filename = 'aaron-kr-' . $type . '-export-' . date( 'Y-m-d' ) . '.json';
+
+    // These headers must fire before any output
+    nocache_headers();
+    header( 'Content-Type: application/json; charset=utf-8' );
+    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'X-Accel-Buffering: no' ); // tell nginx not to buffer
+    header( 'Transfer-Encoding: chunked' );
+
+    aaron_kr_stream_json( $type, $embed );
+    exit; // never let WordPress render the page
+} );
+
+// ════════════════════════════════════════════════════════════════════════════
+// ADMIN PAGE — just the form UI, no download logic here
+// ════════════════════════════════════════════════════════════════════════════
 
 add_action( 'admin_menu', function () {
     add_management_page(
@@ -18,59 +60,50 @@ add_action( 'admin_menu', function () {
         '📦 Export to aaron.kr',
         'manage_options',
         'aaron-kr-exporter',
-        'aaron_kr_exporter_page'
+        'aaron_kr_exporter_ui'
     );
 } );
 
-function aaron_kr_exporter_page(): void {
+function aaron_kr_exporter_ui(): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_die( 'Not allowed.' );
 
-    // ── Trigger download ───────────────────────────────────────────────────────
-    if (
-        isset( $_POST['aaron_kr_do_export'] ) &&
-        wp_verify_nonce( $_POST['_wpnonce'], 'aaron_kr_export' )
-    ) {
-        $type     = sanitize_key( $_POST['export_type'] ?? 'portfolio' );
-        $embed    = ! empty( $_POST['embed_images'] );
-        $data     = aaron_kr_build_export( $type, $embed );
-        $filename = "aaron-kr-{$type}-export-" . date( 'Y-m-d' ) . '.json';
-
-        header( 'Content-Type: application/json; charset=utf-8' );
-        header( "Content-Disposition: attachment; filename=\"{$filename}\"" );
-        header( 'Cache-Control: no-cache' );
-        echo wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE );
-        exit;
-    }
-
-    // ── Preview counts ─────────────────────────────────────────────────────────
     $counts = [];
-    foreach ( [ 'jetpack-portfolio' => 'portfolio', 'jetpack-testimonial' => 'testimonial' ] as $jp => $new ) {
+    foreach ( [
+        'jetpack-portfolio'   => 'portfolio',
+        'jetpack-testimonial' => 'testimonial',
+    ] as $jp => $new ) {
         $c = wp_count_posts( $jp );
         $counts[ $jp ] = [
             'new_type' => $new,
-            'publish'  => $c->publish  ?? 0,
-            'draft'    => $c->draft    ?? 0,
-            'private'  => $c->private  ?? 0,
+            'publish'  => (int) ( $c->publish ?? 0 ),
+            'draft'    => (int) ( $c->draft   ?? 0 ),
         ];
     }
     ?>
     <div class="wrap">
         <h1>📦 Export Portfolio → aaron.kr</h1>
-        <p>Exports Jetpack Portfolio or Testimonials as a self-contained JSON file
-           ready to import on your aaron.kr WordPress installation. Post types are
-           remapped to your new custom CPTs. All taxonomy terms and post meta are
-           included. Optionally embeds featured images as base64.</p>
 
-        <h2>Available content</h2>
-        <table class="widefat" style="max-width:600px;margin-bottom:1.5rem">
-            <thead><tr><th>Source type</th><th>→ New type</th><th>Published</th><th>Drafts</th></tr></thead>
+        <div class="notice notice-info" style="max-width:680px">
+            <p>
+                <strong>Read-only.</strong> This tool never modifies any content —
+                it only reads your database and media files.<br>
+                Images are encoded one at a time as the file streams to your browser,
+                so even 136 posts with featured images won't cause a memory error.
+            </p>
+        </div>
+
+        <h2 style="margin-top:1.5rem">Available content</h2>
+        <table class="widefat" style="max-width:560px;margin-bottom:1.5rem">
+            <thead>
+                <tr><th>Source type</th><th>→ Target type</th><th>Published</th><th>Drafts</th></tr>
+            </thead>
             <tbody>
-            <?php foreach ( $counts as $jp => [ 'new_type' => $nt, 'publish' => $pub, 'draft' => $dr ] ) : ?>
+            <?php foreach ( $counts as $jp => $info ) : ?>
                 <tr>
                     <td><code><?php echo esc_html( $jp ); ?></code></td>
-                    <td><code><?php echo esc_html( $nt ); ?></code></td>
-                    <td><?php echo (int) $pub; ?></td>
-                    <td><?php echo (int) $dr; ?></td>
+                    <td><code><?php echo esc_html( $info['new_type'] ); ?></code></td>
+                    <td><?php echo $info['publish']; ?></td>
+                    <td><?php echo $info['draft']; ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -79,186 +112,196 @@ function aaron_kr_exporter_page(): void {
         <form method="post">
             <?php wp_nonce_field( 'aaron_kr_export' ); ?>
 
-            <table class="form-table">
+            <table class="form-table" style="max-width:680px">
                 <tr>
-                    <th><label for="export_type">Export which type?</label></th>
+                    <th scope="row"><label for="export_type">Export type</label></th>
                     <td>
-                        <select name="export_type" id="export_type">
-                            <option value="portfolio">Jetpack Portfolio → portfolio</option>
-                            <option value="testimonial">Jetpack Testimonials → testimonial</option>
+                        <select name="export_type" id="export_type" class="regular-text">
+                            <option value="portfolio">
+                                Jetpack Portfolio → portfolio
+                                (<?php echo $counts['jetpack-portfolio']['publish']; ?> posts)
+                            </option>
+                            <option value="testimonial">
+                                Jetpack Testimonials → testimonial
+                                (<?php echo $counts['jetpack-testimonial']['publish']; ?> posts)
+                            </option>
                         </select>
                     </td>
                 </tr>
                 <tr>
-                    <th><label for="embed_images">Embed featured images?</label></th>
+                    <th scope="row"><label for="embed_images">Featured images</label></th>
                     <td>
-                        <label>
-                            <input type="checkbox" name="embed_images" id="embed_images" value="1" checked>
-                            Yes — encode images as base64 in the JSON
-                            <br><small style="color:#666">Recommended. Makes the JSON self-contained.
-                            File may be large (5–50MB depending on image count).
-                            Uncheck only if you know images are already on the target server.</small>
-                        </label>
+                        <fieldset>
+                            <label>
+                                <input type="radio" name="embed_images" value="1" checked>
+                                Embed as base64 <em>(recommended — self-contained, ~50–200MB for 136 posts)</em>
+                            </label><br><br>
+                            <label>
+                                <input type="radio" name="embed_images" value="0">
+                                URLs only <em>(smaller file, importer fetches images during import)</em>
+                            </label>
+                        </fieldset>
+                        <p class="description" style="margin-top:.5rem">
+                            Base64 mode streams images one at a time — safe for large libraries.
+                            "URLs only" is faster to generate but the importer needs internet
+                            access to the source server at import time.
+                        </p>
                     </td>
                 </tr>
             </table>
 
             <p class="submit">
-                <button type="submit" name="aaron_kr_do_export" value="1"
-                    class="button button-primary button-large">
-                    ⬇ Generate &amp; Download JSON
-                </button>
+                <input type="submit" name="aaron_kr_do_export" value="⬇ Download JSON"
+                       class="button button-primary button-large">
             </p>
         </form>
 
         <hr>
-        <h2>After exporting</h2>
-        <ol>
-            <li>Download the JSON file from this page.</li>
-            <li>On <strong>aaron.kr</strong> (or your local WP): install <code>aaron-kr-importer.php</code> as a mu-plugin.</li>
-            <li>Go to <strong>Tools → Import from aaron.kr JSON</strong> on the target site.</li>
-            <li>Upload and run the import.</li>
-            <li>Delete both this exporter and the importer when done.</li>
+        <h2>After downloading</h2>
+        <ol style="max-width:600px;line-height:1.8">
+            <li>On <strong>aaron.kr / aaronkr.local</strong>: copy
+                <code>aaron-kr-importer.php</code> to <code>wp-content/mu-plugins/</code></li>
+            <li>Go to <strong>Tools → Import from aaron.kr JSON</strong></li>
+            <li>Upload the file — run <strong>Dry Run</strong> first to preview</li>
+            <li>Run the real import, verify the results table</li>
+            <li><strong>Delete both files</strong> (exporter + importer) when done</li>
         </ol>
     </div>
     <?php
 }
 
-// ── Build the export array ────────────────────────────────────────────────────
-function aaron_kr_build_export( string $type, bool $embed_images ): array {
-    $jp_type = "jetpack-{$type}"; // jetpack-portfolio or jetpack-testimonial
+// ════════════════════════════════════════════════════════════════════════════
+// STREAMING JSON — writes directly to PHP output, one post at a time
+// ════════════════════════════════════════════════════════════════════════════
 
-    // Jetpack taxonomy names
-    $jp_tag_tax  = "jetpack-{$type}-tag";  // jetpack-portfolio-tag
-    $jp_type_tax = "jetpack-{$type}-type"; // jetpack-portfolio-type (portfolio only)
+function aaron_kr_stream_json( string $type, bool $embed ): void {
+    $jp_type     = "jetpack-{$type}";
+    $jp_tag_tax  = "jetpack-{$type}-tag";
+    $jp_type_tax = "jetpack-{$type}-type";
 
-    $posts = get_posts( [
+    // Fetch IDs only — keeps this query lean
+    $ids = get_posts( [
         'post_type'      => $jp_type,
         'posts_per_page' => -1,
         'post_status'    => [ 'publish', 'draft', 'private', 'pending' ],
+        'fields'         => 'ids',
         'orderby'        => 'date',
         'order'          => 'DESC',
     ] );
 
-    $export = [
-        'export_version'  => '1.0',
-        'export_date'     => date( 'c' ),
-        'source_site'     => get_bloginfo( 'url' ),
-        'source_type'     => $jp_type,
-        'target_type'     => $type,
-        'post_count'      => count( $posts ),
-        'posts'           => [],
-    ];
+    // ── JSON envelope (no closing bracket yet) ────────────────────────────────
+    echo '{';
+    echo '"export_version":"1.2",';
+    echo '"export_date":' . wp_json_encode( date( 'c' ) ) . ',';
+    echo '"source_site":' . wp_json_encode( get_bloginfo( 'url' ) ) . ',';
+    echo '"source_type":' . wp_json_encode( $jp_type ) . ',';
+    echo '"target_type":' . wp_json_encode( $type ) . ',';
+    echo '"post_count":' . count( $ids ) . ',';
+    echo '"posts":[';
 
-    foreach ( $posts as $post ) {
-        $pid = $post->ID;
+    $first = true;
+    foreach ( $ids as $pid ) {
+        $post = get_post( $pid );
+        if ( ! $post ) continue;
 
-        // ── Taxonomy terms ────────────────────────────────────────────────────
-        $tags  = wp_get_object_terms( $pid, $jp_tag_tax );
-        $types = wp_get_object_terms( $pid, $jp_type_tax );
-        // Also grab standard post_tag and category in case some were already there
-        $std_tags = wp_get_object_terms( $pid, 'post_tag' );
-        $cats     = wp_get_object_terms( $pid, 'category' );
+        if ( ! $first ) echo ',';
+        $first = false;
 
-        $term_map = function ( $terms ) {
-            if ( is_wp_error( $terms ) ) return [];
-            return array_map( fn( $t ) => [
-                'name' => $t->name,
-                'slug' => $t->slug,
-            ], $terms );
+        // ── Terms ─────────────────────────────────────────────────────────────
+        $flat = function ( $tax ) use ( $pid ): array {
+            $terms = wp_get_object_terms( $pid, $tax );
+            if ( is_wp_error( $terms ) || empty( $terms ) ) return [];
+            return array_map( fn( $t ) => [ 'name' => $t->name, 'slug' => $t->slug ], $terms );
         };
 
         // ── Post meta ─────────────────────────────────────────────────────────
-        $all_meta = get_post_meta( $pid );
-        $clean_meta = [];
-        // Skip internal WP meta and thumbnail ID (handled separately)
         $skip = [ '_thumbnail_id', '_edit_lock', '_edit_last', '_wp_old_slug',
-                  '_oembed_', '_encloseme', '_pingme' ];
-        foreach ( $all_meta as $key => $values ) {
-            $skip_this = false;
-            foreach ( $skip as $prefix ) {
-                if ( strpos( $key, $prefix ) === 0 ) { $skip_this = true; break; }
+                  '_oembed_', '_encloseme', '_pingme', '_wp_attachment_', 'jetpack_' ];
+        $meta = [];
+        foreach ( get_post_meta( $pid ) as $k => $v ) {
+            foreach ( $skip as $p ) {
+                if ( strpos( $k, $p ) === 0 ) continue 2;
             }
-            if ( ! $skip_this ) {
-                $clean_meta[ $key ] = count( $values ) === 1 ? $values[0] : $values;
-            }
+            $meta[ $k ] = count( $v ) === 1 ? $v[0] : $v;
         }
 
-        // ── Featured image ────────────────────────────────────────────────────
-        $thumb_id  = get_post_thumbnail_id( $pid );
-        $thumb_url = $thumb_id ? wp_get_attachment_image_url( $thumb_id, 'full' ) : null;
-        $thumb_data = null;
+        // ── Featured image ─────────────────────────────────────────────────────
+        $tid      = get_post_thumbnail_id( $pid ) ?: null;
+        $turl     = $tid ? wp_get_attachment_image_url( $tid, 'full' ) : null;
+        $tfile    = $turl ? basename( (string) parse_url( $turl, PHP_URL_PATH ) ) : null;
+        $talt     = $tid  ? (string) get_post_meta( $tid, '_wp_attachment_image_alt', true ) : '';
+        $tb64     = null;
 
-        if ( $thumb_id && $embed_images ) {
-            $thumb_data = aaron_kr_encode_image( $thumb_id );
+        if ( $tid && $embed ) {
+            $encoded = aaron_kr_encode_one_image( $tid );
+            $tb64    = $encoded ?? [ 'data' => null, 'mime' => null,
+                                     'url' => $turl, 'source' => 'encode_failed' ];
         }
 
-        // ── ACF fields ────────────────────────────────────────────────────────
-        $acf = function_exists( 'get_fields' ) ? get_fields( $pid ) : null;
+        // ── Stream this post ──────────────────────────────────────────────────
+        echo wp_json_encode( [
+            'post_title'              => $post->post_title,
+            'post_content'            => $post->post_content,
+            'post_excerpt'            => $post->post_excerpt,
+            'post_status'             => $post->post_status,
+            'post_date'               => $post->post_date,
+            'post_date_gmt'           => $post->post_date_gmt,
+            'post_name'               => $post->post_name,
+            'post_type'               => $type,         // ← remapped
+            'menu_order'              => (int) $post->menu_order,
+            'jp_tags'                 => $flat( $jp_tag_tax ),
+            'jp_type_terms'           => $flat( $jp_type_tax ),
+            'std_tags'                => $flat( 'post_tag' ),
+            'categories'              => $flat( 'category' ),
+            'post_meta'               => $meta,
+            'acf'                     => function_exists( 'get_fields' )
+                                            ? ( get_fields( $pid ) ?: null )
+                                            : null,
+            'featured_image_url'      => $turl,
+            'featured_image_filename' => $tfile,
+            'featured_image_alt'      => $talt,
+            'featured_image_base64'   => $tb64,
+        ], JSON_UNESCAPED_UNICODE );
 
-        $export['posts'][] = [
-            // Core post data
-            'post_title'    => $post->post_title,
-            'post_content'  => $post->post_content,
-            'post_excerpt'  => $post->post_excerpt,
-            'post_status'   => $post->post_status,
-            'post_date'     => $post->post_date,
-            'post_date_gmt' => $post->post_date_gmt,
-            'post_name'     => $post->post_name,  // slug
-            'post_type'     => $type,              // REMAPPED to new type
-            'post_password' => $post->post_password,
-            'menu_order'    => $post->menu_order,
+        // Free the image data immediately — do not accumulate in memory
+        unset( $tb64, $encoded, $meta );
 
-            // Taxonomy terms
-            'jp_tags'       => $term_map( $tags ),   // jetpack-portfolio-tag → post_tag
-            'jp_type_terms' => $term_map( $types ),  // jetpack-portfolio-type → portfolio_type
-            'std_tags'      => $term_map( $std_tags ),
-            'categories'    => $term_map( $cats ),
-
-            // Meta
-            'post_meta'     => $clean_meta,
-            'acf'           => $acf,
-
-            // Featured image
-            'featured_image_url'      => $thumb_url,
-            'featured_image_filename' => $thumb_url ? basename( parse_url( $thumb_url, PHP_URL_PATH ) ) : null,
-            'featured_image_alt'      => $thumb_id ? get_post_meta( $thumb_id, '_wp_attachment_image_alt', true ) : '',
-            'featured_image_base64'   => $thumb_data,  // null if embed_images=false
-        ];
+        // Push bytes to the browser so the download progresses
+        flush();
     }
 
-    return $export;
+    echo ']}';
 }
 
-// ── Encode a WP attachment as base64 ─────────────────────────────────────────
-function aaron_kr_encode_image( int $attachment_id ): ?array {
-    // Try the local file path first (fastest)
-    $file_path = get_attached_file( $attachment_id );
-
-    if ( $file_path && file_exists( $file_path ) ) {
-        $mime     = mime_content_type( $file_path ) ?: 'image/jpeg';
-        $data     = base64_encode( file_get_contents( $file_path ) );
-        return [ 'mime' => $mime, 'data' => $data, 'source' => 'local' ];
+// ── Encode one attachment ────────────────────────────────────────────────────
+function aaron_kr_encode_one_image( int $id ): ?array {
+    // Local file path is fastest — no HTTP, no extra memory copy
+    $path = get_attached_file( $id );
+    if ( $path && file_exists( $path ) ) {
+        $mime = (string) ( mime_content_type( $path ) ?: 'image/jpeg' );
+        $raw  = file_get_contents( $path );
+        if ( $raw !== false ) {
+            return [ 'mime' => $mime, 'data' => base64_encode( $raw ), 'source' => 'local' ];
+        }
     }
 
-    // File not local (e.g. Jetpack CDN, remote server) — fetch via HTTP
-    $url = wp_get_attachment_image_url( $attachment_id, 'full' );
+    // Remote fetch (Jetpack CDN or offloaded media)
+    $url = wp_get_attachment_image_url( $id, 'full' );
     if ( ! $url ) return null;
 
-    // Also try i0.wp.com CDN variant that Jetpack uses
-    $response = wp_remote_get( $url, [ 'timeout' => 30 ] );
-    if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
-        // Try the direct source URL without CDN
-        $source_url = preg_replace( '#^https://i\d+\.wp\.com/#', 'https://', $url );
-        $response   = wp_remote_get( $source_url, [ 'timeout' => 30 ] );
-        if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
-            return [ 'mime' => null, 'data' => null, 'url' => $url, 'source' => 'fetch_failed' ];
+    // Strip Jetpack CDN prefix: i0.wp.com/domain.com/path → https://domain.com/path
+    $src = (string) preg_replace( '#^https?://i\d+\.wp\.com/#', 'https://', $url );
+
+    foreach ( [ $src, $url ] as $try ) {
+        $resp = wp_remote_get( $try, [ 'timeout' => 30, 'sslverify' => false ] );
+        if ( ! is_wp_error( $resp ) && wp_remote_retrieve_response_code( $resp ) === 200 ) {
+            $body = wp_remote_retrieve_body( $resp );
+            $mime = explode( ';', wp_remote_retrieve_header( $resp, 'content-type' ) )[0];
+            return [ 'mime' => trim( $mime ) ?: 'image/jpeg',
+                     'data' => base64_encode( $body ),
+                     'source' => 'remote', 'url' => $try ];
         }
-        $url = $source_url;
     }
 
-    $body = wp_remote_retrieve_body( $response );
-    $mime = wp_remote_retrieve_header( $response, 'content-type' ) ?: 'image/jpeg';
-    $mime = explode( ';', $mime )[0]; // strip charset if present
-    return [ 'mime' => $mime, 'data' => base64_encode( $body ), 'source' => 'remote', 'url' => $url ];
+    return [ 'data' => null, 'mime' => null, 'url' => $url, 'source' => 'fetch_failed' ];
 }
