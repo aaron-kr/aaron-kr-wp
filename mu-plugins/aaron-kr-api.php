@@ -92,8 +92,11 @@ add_filter('the_content', function($content) {
 define( 'AARON_KR_ALLOWED_ORIGINS', [
     'https://aaron.kr',
     'https://www.aaron.kr',
+    'https://aaronsnowberger.com',
+    'https://www.aaronsnowberger.com',
     'http://localhost:3000',
     'http://localhost:3001',
+    'http://localhost:4000',  // Jekyll dev server
 ] );
 
 add_action( 'rest_api_init', function () {
