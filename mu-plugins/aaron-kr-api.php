@@ -74,6 +74,17 @@ function aaron_kr_headless_preview_link( string $url, $post ): string {
     return str_replace( $wp_base, $fe_base, $url );
 }
 
+add_filter('the_content', function($content) {
+    if (!is_singular('post')) return $content;
+    $age = (time() - get_the_date('U')) / (365.25 * 86400);
+    if ($age < 3) return $content;
+    $notice = '<div class="archived-notice">
+        <strong>Note:</strong> This post is from ' . get_the_date('Y') . 
+        ' and may reflect outdated tools or thinking. Kept for context.
+    </div>';
+    return $notice . $content;
+}, 10);
+
 // ════════════════════════════════════════════════════════════════════════════
 // 3. CORS
 // ════════════════════════════════════════════════════════════════════════════
@@ -514,7 +525,7 @@ add_action( 'save_post', function ( $id ) {
         'talk_event','talk_event_date','talk_location','talk_slides_url','talk_video_url','talk_language',
         'testimonial_name','testimonial_title','testimonial_org','testimonial_rating','testimonial_language','testimonial_context',
         'portfolio_client','portfolio_year','portfolio_tools','portfolio_project_url',
-        'naver_blog_url', 'korean_post_url',
+        'naver_blog_url', 'korean_post_url', 'korean_title',
     ] as $key ) {
         if ( isset( $_POST[$key] ) ) update_post_meta( $id, $key, sanitize_text_field( $_POST[$key] ) );
     }
@@ -537,6 +548,10 @@ add_action( 'rest_api_init', function () {
             'get_callback' => fn( $p ) => get_post_meta( $p['id'], 'korean_post_url', true ) ?: null,
             'schema'       => [ 'type' => [ 'string', 'null' ], 'context' => [ 'view' ] ],
         ] );
+        register_rest_field( $type, 'korean_title', [
+            'get_callback' => fn( $p ) => get_post_meta( $p['id'], 'korean_title', true ) ?: null,
+            'schema'       => [ 'type' => [ 'string', 'null' ], 'context' => [ 'view' ] ],
+        ] );
     }
 } );
 
@@ -548,9 +563,12 @@ add_action( 'add_meta_boxes', function () {
         'External / Cross-post Links',
         function ( $post ) {
             wp_nonce_field( 'aaron_kr_save_meta', 'aaron_kr_meta_nonce' );
-            $naver   = esc_attr( get_post_meta( $post->ID, 'naver_blog_url', true ) );
-            $ko_url  = esc_attr( get_post_meta( $post->ID, 'korean_post_url', true ) );
+            $naver    = esc_attr( get_post_meta( $post->ID, 'naver_blog_url',  true ) );
+            $ko_url   = esc_attr( get_post_meta( $post->ID, 'korean_post_url', true ) );
+            $ko_title = esc_attr( get_post_meta( $post->ID, 'korean_title',    true ) );
             echo '<table style="width:100%">
+                <tr><td style="padding:2px 0"><label style="font-weight:600;font-size:11px">Korean Title (한국어 제목)</label></td></tr>
+                <tr><td style="padding-bottom:6px"><input type="text" name="korean_title" value="' . $ko_title . '" style="width:100%;box-sizing:border-box" placeholder="한국어 제목을 입력하세요" /></td></tr>
                 <tr><td style="padding:2px 0"><label style="font-weight:600;font-size:11px">Naver Blog URL (한국어로 읽기)</label></td></tr>
                 <tr><td style="padding-bottom:6px"><input type="url" name="naver_blog_url" value="' . $naver . '" style="width:100%;box-sizing:border-box" placeholder="https://m.blog.naver.com/..." /></td></tr>
                 <tr><td style="padding:2px 0"><label style="font-weight:600;font-size:11px">Korean Post URL (alternate link, if not Naver)</label></td></tr>
@@ -659,3 +677,41 @@ function aaron_kr_save_custom_avatar( int $user_id ): void {
         esc_url_raw( $_POST['aaron_kr_custom_avatar'] ?? '' )
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 12. VERCEL DEPLOY HOOK
+//     Triggers a Vercel rebuild whenever a post transitions to published state
+//     (new publish OR save of an already-published post).
+//
+//     Setup:
+//       1. Vercel dashboard → Project → Settings → Git → Deploy Hooks → Create
+//       2. Name it "WordPress publish", branch "main", copy the URL
+//       3. Add to wp-config.php on the server:
+//            define( 'AARON_KR_VERCEL_DEPLOY_HOOK', 'https://api.vercel.com/v1/integrations/deploy/...' );
+//          OR store it in WP options (set once via WP CLI or a one-time admin screen):
+//            update_option( 'aaron_kr_vercel_hook', 'https://...' );
+//
+//     The hook fires non-blocking (timeout 1s) so it never slows down a save.
+// ════════════════════════════════════════════════════════════════════════════
+
+add_action( 'transition_post_status', function ( string $new_status, string $old_status, WP_Post $post ): void {
+    // Only fire when the post is (or stays) published — catches both new publishes and updates
+    if ( $new_status !== 'publish' ) return;
+
+    // Only front-facing content types — skip revisions, nav menus, etc.
+    $supported = [ 'post', 'page', 'portfolio', 'research', 'talk', 'course' ];
+    if ( ! in_array( $post->post_type, $supported, true ) ) return;
+
+    // Prefer a constant defined in wp-config.php; fall back to a WP option
+    $hook = defined( 'AARON_KR_VERCEL_DEPLOY_HOOK' )
+        ? AARON_KR_VERCEL_DEPLOY_HOOK
+        : get_option( 'aaron_kr_vercel_hook', '' );
+    if ( empty( $hook ) ) return;
+
+    // Fire and forget — non-blocking so the editor save is never delayed
+    wp_remote_post( esc_url_raw( $hook ), [
+        'blocking' => false,
+        'timeout'  => 1,
+        'body'     => [],
+    ] );
+}, 10, 3 );
