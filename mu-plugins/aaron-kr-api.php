@@ -441,6 +441,17 @@ function aaron_kr_register_rest_fields() {
     ] );
 }
 
+add_action('rest_api_init', function() {
+  register_rest_field('testimonial', 'featured_image_url', [
+    'get_callback' => function($obj) {
+      $id = $obj['featured_media'];
+      return $id ? get_the_post_thumbnail_url($id, 'medium') : null;
+    },
+    'schema' => ['type' => 'string', 'format' => 'uri'],
+  ]);
+});
+
+
 // ════════════════════════════════════════════════════════════════════════════
 // 8. ADMIN — FEATURED IMAGE COLUMN + META BOXES
 // ════════════════════════════════════════════════════════════════════════════
